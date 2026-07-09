@@ -1,7 +1,7 @@
 import os
 import sys
 
-# Fix pour la compatibilité Java 17+ / Java 21+ avec Spark (lors de l'exécution hors Docker)
+# Fix pour la compatibilité Java 17+ / Java 21+ avec Spark (exécution hors Docker)
 os.environ["JAVA_TOOL_OPTIONS"] = (
     "--add-opens=java.base/java.nio=ALL-UNNAMED "
     "--add-opens=java.base/sun.nio.ch=ALL-UNNAMED "
@@ -14,30 +14,43 @@ from pyspark.sql.functions import col, window, mean, max, count, row_number
 from pyspark.sql.window import Window
 
 def main():
-    # Définition des chemins absolus
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    
-    referentiels_dir = os.path.join(base_dir, "data", "referentiels")
-    silver_path = os.path.join(base_dir, "data", "delta", "silver")
-    
-    fact_gold_path = os.path.join(base_dir, "data", "delta", "gold", "fact_machine_aggregations")
-    dim_gold_path = os.path.join(base_dir, "data", "delta", "gold", "dim_sensor_state")
-    
-    chk_fact_path = os.path.join(base_dir, "data", "checkpoints", "fact_machine_aggregations")
-    chk_dim_path = os.path.join(base_dir, "data", "checkpoints", "dim_sensor_state")
+    # 1. Détection dynamique des chemins (Docker Container vs Local Host)
+    if os.path.exists("/opt/data"):
+        print(">>> Détection de l'environnement DOCKER.")
+        referentiels_dir = "/opt/data"
+        silver_path = "/opt/lakehouse/silver"
+        fact_gold_path = "/opt/lakehouse/gold/fact_machine_aggregations"
+        dim_gold_path = "/opt/lakehouse/gold/dim_sensor_state"
+        chk_fact_path = "/opt/checkpoints/fact_machine_aggregations"
+        chk_dim_path = "/opt/checkpoints/dim_sensor_state"
+        postgres_host = "postgres"
+        warehouse_dir = "/opt/spark-warehouse"
+    else:
+        print(">>> Détection de l'environnement LOCAL HOST.")
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        referentiels_dir = os.path.join(base_dir, "data")
+        silver_path = os.path.join(base_dir, "data", "delta", "silver")
+        fact_gold_path = os.path.join(base_dir, "data", "delta", "gold", "fact_machine_aggregations")
+        dim_gold_path = os.path.join(base_dir, "data", "delta", "gold", "dim_sensor_state")
+        chk_fact_path = os.path.join(base_dir, "data", "checkpoints", "fact_machine_aggregations")
+        chk_dim_path = os.path.join(base_dir, "data", "checkpoints", "dim_sensor_state")
+        postgres_host = "localhost"
+        warehouse_dir = os.path.join(base_dir, "spark-warehouse")
+
+    postgres_url = f"jdbc:postgresql://{postgres_host}:5432/warehouse"
 
     # Initialisation de la Session Spark avec support Delta Lake
     spark = SparkSession.builder \
         .appName("GoldPipeline") \
         .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension") \
         .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog") \
-        .config("spark.sql.warehouse.dir", os.path.join(base_dir, "spark-warehouse")) \
+        .config("spark.sql.warehouse.dir", warehouse_dir) \
         .config("spark.sql.shuffle.partitions", "2") \
         .getOrCreate()
 
     print("Spark Session initialisée pour la couche GOLD.")
 
-    # 1. Chargement des référentiels statiques (CSVs)
+    # 2. Chargement des référentiels statiques (CSVs) depuis /opt/data ou data/
     print("Chargement des référentiels statiques...")
     df_capteurs = spark.read \
         .option("header", "true") \
@@ -54,7 +67,7 @@ def main():
         .option("inferSchema", "true") \
         .csv(os.path.join(referentiels_dir, "sites.csv"))
 
-    # 2. Lecture en streaming de la table Delta Silver
+    # 3. Lecture en streaming de la table Delta Silver
     print(f"Lecture du flux Silver depuis : {silver_path}")
     df_silver = spark.readStream \
         .format("delta") \
@@ -89,12 +102,31 @@ def main():
             col("nombre_mesures")
         )
 
-    # Écriture en mode streaming append
+    # Écriture double destinations : Delta Lake & Postgres
+    def write_fact_batch(batch_df, batch_id):
+        print(f"Début écriture Fact batch {batch_id}...")
+        # A. Delta (Source de vérité)
+        batch_df.write.format("delta").mode("append").save(fact_gold_path)
+        
+        # B. Postgres (Serving Layer pour Metabase)
+        try:
+            batch_df.write \
+                .format("jdbc") \
+                .option("url", postgres_url) \
+                .option("dbtable", "gold.fact_machine_aggregations") \
+                .option("user", "warehouse") \
+                .option("password", "warehouse") \
+                .option("driver", "org.postgresql.Driver") \
+                .mode("append") \
+                .save()
+            print(f"Fact batch {batch_id} écrit dans Postgres.")
+        except Exception as e:
+            print(f"Erreur d'écriture Fact batch {batch_id} dans Postgres (JDBC) : {e}")
+
     query_fact = df_fact_aggregations.writeStream \
-        .format("delta") \
-        .outputMode("append") \
+        .foreachBatch(write_fact_batch) \
         .option("checkpointLocation", chk_fact_path) \
-        .start(fact_gold_path)
+        .start()
 
     # =========================================================================
     # JOB 2 : Table de Dimension (État Courant Capteur via MERGE INTO)
@@ -102,11 +134,7 @@ def main():
     print("Configuration du Job 2 : État courant des capteurs (MERGE)...")
 
     def merge_sensor_state(batch_df, batch_id):
-        """
-        Fonction exécutée sur chaque micro-batch pour dédupliquer et fusionner (MERGE) 
-        les données dans la table Delta Gold de dimension.
-        """
-        print(f"Début du traitement du micro-batch {batch_id}...")
+        print(f"Début du traitement du micro-batch {batch_id} (merge)...")
         
         # 1. Déduplication au sein du batch : garder uniquement la mesure la plus récente par capteur
         window_spec = Window.partitionBy("capteur_id").orderBy(col("timestamp").desc())
@@ -115,8 +143,8 @@ def main():
             .filter(col("row_num") == 1) \
             .drop("row_num")
 
-        # 2. Enrichissement avec les référentiels statiques
-        # Nous renommons les colonnes de jointure pour éviter les conflits et clarifier le schéma
+        # 2. Jointure avec référentiels statiques (en enlevant type_mesure du CSV pour éviter l'ambiguïté)
+        # Note : region et criticite sont sans accent dans machines.csv et sites.csv officiels.
         enriched_batch = latest_sensor_records \
             .join(df_capteurs.drop("type_mesure"), "capteur_id", "left") \
             .join(df_machines, "machine_id", "left") \
@@ -126,11 +154,11 @@ def main():
                 col("machine_id"),
                 col("site_id"),
                 col("nom").alias("site_nom"),
-                col("région").alias("site_region"),
+                col("region").alias("site_region"),
                 col("responsable_site"),
                 col("type_machine"),
                 col("ligne_production"),
-                col("criticité").alias("machine_criticite"),
+                col("criticite").alias("machine_criticite"),
                 col("responsable_technique").alias("machine_responsable_technique"),
                 col("fabricant").alias("capteur_fabricant"),
                 col("precision_capteur"),
@@ -140,24 +168,21 @@ def main():
                 col("qualite_signal"),
                 col("batterie_pourcentage"),
                 col("timestamp").alias("dernier_timestamp"),
-                col("is_anomaly"),
-                col("anomaly_reason"),
+                col("est_anomalie"),
+                col("type_anomalie"),
                 col("seuil_min"),
                 col("seuil_max"),
                 col("est_valide")
             )
 
-        # 3. MERGE INTO avec Delta Lake API
+        # 3. MERGE INTO avec Delta Lake API dans la table de dimension
         from delta.tables import DeltaTable
         
-        # Si la table Gold cible n'existe pas encore, on la crée à partir du premier batch
         if not DeltaTable.isDeltaTable(spark, dim_gold_path):
             print(f"Initialisation de la table Gold Delta à l'emplacement : {dim_gold_path}")
             enriched_batch.write.format("delta").mode("overwrite").save(dim_gold_path)
         else:
             delta_target = DeltaTable.forPath(spark, dim_gold_path)
-            
-            # Exécution de la fusion Delta (MERGE INTO)
             delta_target.alias("target") \
                 .merge(
                     enriched_batch.alias("source"),
@@ -181,8 +206,8 @@ def main():
                     "qualite_signal": "source.qualite_signal",
                     "batterie_pourcentage": "source.batterie_pourcentage",
                     "dernier_timestamp": "source.dernier_timestamp",
-                    "is_anomaly": "source.is_anomaly",
-                    "anomaly_reason": "source.anomaly_reason",
+                    "est_anomalie": "source.est_anomalie",
+                    "type_anomalie": "source.type_anomalie",
                     "seuil_min": "source.seuil_min",
                     "seuil_max": "source.seuil_max",
                     "est_valide": "source.est_valide"
@@ -206,14 +231,30 @@ def main():
                     "qualite_signal": "source.qualite_signal",
                     "batterie_pourcentage": "source.batterie_pourcentage",
                     "dernier_timestamp": "source.dernier_timestamp",
-                    "is_anomaly": "source.is_anomaly",
-                    "anomaly_reason": "source.anomaly_reason",
+                    "est_anomalie": "source.est_anomalie",
+                    "type_anomalie": "source.type_anomalie",
                     "seuil_min": "source.seuil_min",
                     "seuil_max": "source.seuil_max",
                     "est_valide": "source.est_valide"
                 }) \
                 .execute()
-            print(f"Merge complété pour le batch {batch_id}.")
+            print(f"Merge Delta complété pour le batch {batch_id}.")
+
+        # 4. Écriture / Synchronisation avec Postgres (Serving Layer pour Metabase)
+        try:
+            df_full_dim = spark.read.format("delta").load(dim_gold_path)
+            df_full_dim.write \
+                .format("jdbc") \
+                .option("url", postgres_url) \
+                .option("dbtable", "gold.dim_sensor_state") \
+                .option("user", "warehouse") \
+                .option("password", "warehouse") \
+                .option("driver", "org.postgresql.Driver") \
+                .mode("overwrite") \
+                .save()
+            print(f"Dim sensor state écrit avec succès dans Postgres (overwrite).")
+        except Exception as e:
+            print(f"Erreur de synchronisation Dim sensor state dans Postgres (JDBC) : {e}")
 
     # Écriture du flux avec foreachBatch
     query_dim = df_silver.writeStream \
