@@ -1,0 +1,4 @@
+machine_id,type_machine,ligne_production,criticité,date_mise_service,capacite_nominale,responsable_technique
+m-07,presse hydraulique,ligne-A,haute,2021-06-01,500,J. Dupont
+m-12,convoyeur,ligne-B,moyenne,2020-09-15,1200,S. Martin
+m-03,robot soudure,ligne-A,haute,2022-03-10,800,R. Dubois
