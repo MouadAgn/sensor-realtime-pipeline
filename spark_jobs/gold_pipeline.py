@@ -142,6 +142,8 @@ def main():
                 col("timestamp").alias("dernier_timestamp"),
                 col("is_anomaly"),
                 col("anomaly_reason"),
+                col("seuil_min"),
+                col("seuil_max"),
                 col("est_valide")
             )
 
@@ -181,6 +183,8 @@ def main():
                     "dernier_timestamp": "source.dernier_timestamp",
                     "is_anomaly": "source.is_anomaly",
                     "anomaly_reason": "source.anomaly_reason",
+                    "seuil_min": "source.seuil_min",
+                    "seuil_max": "source.seuil_max",
                     "est_valide": "source.est_valide"
                 }) \
                 .whenNotMatchedInsert(values={
@@ -204,6 +208,8 @@ def main():
                     "dernier_timestamp": "source.dernier_timestamp",
                     "is_anomaly": "source.is_anomaly",
                     "anomaly_reason": "source.anomaly_reason",
+                    "seuil_min": "source.seuil_min",
+                    "seuil_max": "source.seuil_max",
                     "est_valide": "source.est_valide"
                 }) \
                 .execute()
