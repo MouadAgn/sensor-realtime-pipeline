@@ -107,7 +107,7 @@ services:
     depends_on:
       - spark-master
     entrypoint: ["/opt/spark/bin/spark-class"]
-    command: ["org.apache.spark.deploy.worker.Worker", "spark://spark-master:7077", "--cores", "${SPARK_WORKER_CORES:-2}", "--memory", "${SPARK_WORKER_MEMORY:-3G}", "--webui-port", "8081"]
+    command: ["org.apache.spark.deploy.worker.Worker", "spark://spark-master:7077", "--cores", "${SPARK_WORKER_CORES:-4}", "--memory", "${SPARK_WORKER_MEMORY:-4G}", "--webui-port", "8081"]
     ports:
       - "${SPARK_WORKER_UI_PORT:-8082}:8081"   # Web UI worker
     volumes:

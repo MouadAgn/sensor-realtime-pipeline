@@ -111,3 +111,29 @@ Les événements hors seuil sont **marqués** (`est_anomalie = true`), **pas sup
 - **Silver** : nettoyage + déduplication (`event_id`) + marquage anomalies selon §6.
 - **Gold** : star-schema Delta + `MERGE INTO` (état courant capteur) + agrégation fenêtrée ;
   recopie vers Postgres `gold.*` pour Metabase.
+
+## 8. Budget ressources Spark (⚠ famine en standalone)
+
+En mode **standalone**, un job Structured Streaming **ne rend jamais ses cores** (il
+tourne à l'infini). Avec 3 jobs simultanés (Bronze + Silver + Gold), si le 1er job
+prend tout le worker, les 2 autres restent en **WAITING** indéfiniment.
+
+**Réglage retenu** (défauts versionnés, pas dans le `.env` local) :
+
+| Paramètre | Valeur | Où |
+|-----------|--------|----|
+| Worker | **4 cores / 4 Go** | `docker-compose.yml` (`SPARK_WORKER_CORES/MEMORY`) |
+| Par job | **1 core / 1 g** + `spark.cores.max=1` | `spark/conf/spark-defaults.conf` |
+
+→ 3 jobs = 3 cores / 3 Go, tiennent dans le worker avec de la marge. Vérifiable sur
+http://localhost:8081 (les 3 applications doivent être **RUNNING**, pas WAITING).
+
+**Reproduire l'incident (pour la démo / section Incident du README)** :
+```bash
+# worker volontairement sous-dimensionné
+SPARK_WORKER_CORES=2 docker compose up -d spark-worker
+# lancer les 3 jobs -> Silver & Gold restent en WAITING sur http://localhost:8081
+# puis revenir au défaut :
+docker compose up -d spark-worker
+```
+
