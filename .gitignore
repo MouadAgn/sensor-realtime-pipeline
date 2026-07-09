@@ -10,9 +10,14 @@ checkpoints/*
 # Python
 __pycache__/
 *.py[cod]
+*.pyc
 .venv/
 venv/
 
 # OS
 .DS_Store
 Thumbs.db
+
+data/delta/
+data/checkpoints/
+spark-warehouse/
