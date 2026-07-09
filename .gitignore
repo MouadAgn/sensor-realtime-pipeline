@@ -1,0 +1,18 @@
+# Données générées par le pipeline (ne pas committer)
+lakehouse/*
+!lakehouse/.gitkeep
+checkpoints/*
+!checkpoints/.gitkeep
+
+# Variables d'environnement locales (non versionnées) — voir .env.example
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db

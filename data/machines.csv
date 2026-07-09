@@ -1,0 +1,10 @@
+machine_id,type_machine,ligne_production,criticite,date_mise_service,capacite_nominale,responsable_technique,site_id
+m-01,presse hydraulique,ligne-A,haute,2021-06-01,500,J. Dupont,site-lyon
+m-07,four industriel,ligne-A,haute,2020-02-10,800,A. Moreau,site-lyon
+m-03,convoyeur,ligne-B,moyenne,2022-09-15,1200,S. Martin,site-lyon
+m-12,convoyeur,ligne-B,moyenne,2020-09-15,1200,S. Martin,site-nantes
+m-05,compresseur,ligne-C,haute,2019-11-20,600,K. Nguyen,site-nantes
+m-08,pompe,ligne-C,basse,2023-01-05,300,F. Leroy,site-nantes
+m-09,tour CNC,ligne-D,haute,2021-03-30,450,P. Girard,site-paris
+m-10,robot soudure,ligne-D,moyenne,2022-07-12,700,R. Simon,site-paris
+m-11,ventilateur,ligne-E,basse,2020-05-18,250,N. Faure,site-paris

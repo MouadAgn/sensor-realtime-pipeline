@@ -1,0 +1,2 @@
+# Fork maintenu de kafka-python, compatible Python 3.12+ (drop-in : s'importe via `kafka`)
+kafka-python-ng==2.2.3
