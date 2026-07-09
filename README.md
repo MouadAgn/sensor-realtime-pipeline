@@ -63,62 +63,61 @@ graph TD
 ```
 
 ### Choix techniques de modélisation
-*   **Format des tables :** Delta Lake (pour le support ACID, le Time Travel et les opérations `MERGE INTO`).
-*   **Partitionnement :** *(À compléter : Spécifier les colonnes de partitionnement choisies, ex: partitionnement de la table Bronze/Silver par date ou par `site_id` / `type_mesure` et justifier le choix).*
+*   **Format des tables :** Delta Lake (support ACID, Time Travel, `MERGE INTO`). Toutes les tables Bronze/Silver/Gold vivent sous `./lakehouse/` (bind-mount partagé entre `spark-master` et `spark-worker`).
+*   **Broker :** Kafka en mode **KRaft mono-nœud** (sans Zookeeper) — plus léger, adapté au laptop 16 Go. Topic `sensors-data`, 3 partitions, clé = `capteur_id` (ordre garanti par capteur).
+*   **Restitution BI :** Delta reste la **source de vérité** ; le job Gold recopie le star-schema dans un **Postgres de service** que **Metabase** lit nativement (driver fiable, pas de dépendance à un connecteur Spark SQL fragile).
+*   **Partitionnement (recommandé aux jobs) :** partitionner Bronze/Silver par `date_ingestion` (ou `site_id`) pour limiter la ré-écriture ; Gold agrégé reste petit et non partitionné. *(choix final à la main des lots Bronze/Silver)*
+
+> 📄 **Le contrat d'interface complet (noms de topics, chemins, ports, connexions) est dans [`INFRA.md`](INFRA.md).**
 
 ---
 
 ## 🚀 Guide de Lancement
 
 ### Prérequis
-*   Docker & Docker Compose
-*   Python 3.x (pour le générateur d'événements)
-*   Java/Scala & Spark local (si exécuté hors conteneur) ou environnement Docker Spark préconfiguré.
+*   Docker & Docker Compose v2 (tout tourne en conteneurs — aucun Spark/Java local requis).
+*   Python 3.10+ uniquement si vous voulez regénérer le référentiel CSV hors conteneur.
 
 ### 1. Démarrage de l'infrastructure
-Pour lancer Kafka, Spark, Delta Lake et Metabase :
 ```bash
-docker compose up -d
+docker compose up -d --build
 ```
-*(Optionnel : Décrire ici la liste des conteneurs démarrés et leurs ports associés)*
+Démarre, avec ordre géré par healthchecks : **Kafka** (KRaft) + création du topic, **Kafka UI**, **Spark** (master + worker, Delta/Kafka/JDBC pré-installés), **Postgres** (serving layer), **Metabase**.
 
-### 2. Référentiel Statique (Données de Référence)
-Les fichiers suivants doivent être configurés à la racine du projet ou dans un dossier `/data` :
-*   `capteurs.csv` :
-    ```csv
-    capteur_id,type_mesure,plage_nominale_min,plage_nominale_max,fabricant,date_installation,precision_capteur
-    cpt-042,temperature,10,85,Siemens,2023-03-14,0.5
-    cpt-017,vibration,0,12,Bosch,2022-11-02,0.1
-    ```
-*   `machines.csv` :
-    ```csv
-    machine_id,type_machine,ligne_production,criticité,date_mise_service,capacite_nominale,responsable_technique
-    m-07,presse hydraulique,ligne-A,haute,2021-06-01,500,J. Dupont
-    m-12,convoyeur,ligne-B,moyenne,2020-09-15,1200,S. Martin
-    ```
-*   `sites.csv` :
-    ```csv
-    site_id,nom,région,capacite_site,fuseau_horaire,responsable_site
-    site-lyon,Lyon Usine 1,Auvergne-Rhône-Alpes,3000,Europe/Paris,M. Bernard
-    site-nantes,Nantes Usine 2,Pays de la Loire,1800,Europe/Paris,L. Petit
-    ```
+| Service        | URL / accès              | Rôle                                  |
+|----------------|--------------------------|---------------------------------------|
+| Kafka          | `localhost:29092` (hôte) / `kafka:9092` (conteneurs) | Bus d'événements |
+| Kafka UI       | http://localhost:8080    | Inspection du topic / messages        |
+| Spark master   | http://localhost:8081    | Cluster + soumission des jobs         |
+| Spark worker   | http://localhost:8082    | Exécuteurs                            |
+| Spark job UI   | http://localhost:4040    | Suivi du job streaming en cours       |
+| Postgres       | `localhost:5432` (`warehouse`/`warehouse`) | Serving layer (Gold → BI)   |
+| Metabase       | http://localhost:3000    | Dashboard BI                          |
+
+### 2. Référentiel Statique (déjà généré et committé)
+Les 3 CSV sont dans [`data/`](data/), **cohérents par construction** avec le flux
+(3 sites · 9 machines · 50 capteurs, générés depuis `generator/topology.py`).
+Ils sont montés en lecture seule dans Spark sous `/opt/data/`.
+Pour les regénérer : `make referentiel` (ou `python generator/build_referentiel.py`).
 
 ### 3. Lancement du Générateur d'Événements
 ```bash
-# Installation des dépendances (ex: kafka-python)
-pip install -r generator/requirements.txt
+# Simple (paramètres par défaut : 50 capteurs, 5% d'anomalies, 1-3 s)
+docker compose --profile generator up -d generator
+docker compose logs -f generator          # voir le débit
 
-# Lancement du générateur avec les paramètres souhaités
-python generator/main.py --sensors 50 --frequency 2 --anomaly-rate 0.05
+# Ou en réglant les paramètres via variables d'environnement dans .env
 ```
+Le générateur (`generator/generator.py`) est un **stand-in** au schéma imposé, à
+remplacer par le générateur officiel le moment venu (point de contact : topic `sensors-data`).
 
 ### 4. Soumission des Jobs Spark
-Commandes pour soumettre les différents traitements de stream :
+Delta/Kafka/JDBC sont déjà dans l'image (pas de `--packages`) :
 ```bash
-# Exemple de soumission pour le pipeline
-spark-submit --packages io.delta:delta-core_2.12:2.4.0 spark_jobs/pipeline.py
+docker compose exec spark-master spark-submit /opt/spark-apps/<votre_job>.py
 ```
-*(Préciser ici si vous utilisez des scripts séparés pour chaque couche ou un pipeline global).*
+Déposez vos scripts dans [`spark/apps/`](spark/apps/) (monté sous `/opt/spark-apps`).
+Détails et exemples de code : [`spark/apps/README.md`](spark/apps/README.md).
 
 ---
 
