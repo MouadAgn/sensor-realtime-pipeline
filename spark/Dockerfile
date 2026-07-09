@@ -35,4 +35,8 @@ RUN set -eux; \
 RUN mkdir -p /opt/spark/conf /opt/lakehouse /opt/checkpoints \
     && chown -R 185:185 /opt/spark/conf /opt/lakehouse /opt/checkpoints
 
+# Rendre spark-submit/spark-sql/... disponibles sans chemin complet
+# (utile pour `docker compose exec`, qui n'exécute pas l'entrypoint).
+ENV PATH="/opt/spark/bin:/opt/spark/sbin:${PATH}"
+
 USER 185
