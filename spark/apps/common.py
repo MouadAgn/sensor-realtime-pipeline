@@ -6,6 +6,7 @@ from pyspark.sql import SparkSession
 LAKEHOUSE = "/opt/lakehouse"
 BRONZE_PATH = f"{LAKEHOUSE}/bronze"
 SILVER_PATH = f"{LAKEHOUSE}/silver"
+GOLD_PATH = f"{LAKEHOUSE}/gold"
 CHECKPOINT_DIR = "/opt/checkpoints"
 
 DATA_DIR = "/opt/data" # referentiel CSV
