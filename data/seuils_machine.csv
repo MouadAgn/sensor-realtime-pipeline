@@ -1,0 +1,10 @@
+machine_id,type_mesure,seuil_min,seuil_max
+m-01,vibration,0.0,8.0
+m-07,vibration,0.0,8.0
+m-03,vibration,0.0,10.0
+m-12,vibration,0.0,10.0
+m-05,vibration,0.0,8.0
+m-08,vibration,0.0,11.0
+m-09,vibration,0.0,8.0
+m-10,vibration,0.0,10.0
+m-11,vibration,0.0,11.0

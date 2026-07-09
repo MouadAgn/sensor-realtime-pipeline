@@ -1,7 +1,23 @@
-.venv/
+# Données générées par le pipeline (ne pas committer)
+lakehouse/*
+!lakehouse/.gitkeep
+checkpoints/*
+!checkpoints/.gitkeep
+
+# Variables d'environnement locales (non versionnées) — voir .env.example
+.env
+
+# Python
 __pycache__/
+*.py[cod]
 *.pyc
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db
+
 data/delta/
 data/checkpoints/
 spark-warehouse/
-.env
