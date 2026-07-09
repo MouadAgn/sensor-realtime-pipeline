@@ -118,7 +118,7 @@ def main():
         # 2. Enrichissement avec les référentiels statiques
         # Nous renommons les colonnes de jointure pour éviter les conflits et clarifier le schéma
         enriched_batch = latest_sensor_records \
-            .join(df_capteurs, "capteur_id", "left") \
+            .join(df_capteurs.drop("type_mesure"), "capteur_id", "left") \
             .join(df_machines, "machine_id", "left") \
             .join(df_sites, "site_id", "left") \
             .select(
