@@ -4,3 +4,4 @@ __pycache__/
 data/delta/
 data/checkpoints/
 spark-warehouse/
+.env
