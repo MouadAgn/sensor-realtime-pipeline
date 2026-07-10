@@ -356,3 +356,13 @@ docker compose up -d spark-worker
 ```
 int corrompu, une erreur Out Of Memory (OOM) sur Spark, ou un problème de désynchronisation de schéma Delta Lake, et détailler comment vous l'avez résolu).*
 int corrompu, une erreur Out Of Memory (OOM) sur Spark, ou un problème de désynchronisation de schéma Delta Lake, et détailler comment vous l'avez résolu).*
+
+### 📊 Dashboard Power BI : Supervision de l'Infrastructure IoT
+
+![Tableau de bord des KPI Big Data](bigDataKpi.png)
+
+Ce tableau de bord exploite les données agrégées de notre architecture en médaillon (couche Gold) pour offrir une vision claire de l'état de santé du parc matériel. Il permet de :
+* **Monitorer l'état global** : Suivi instantané du volume total d'anomalies (20K) et de la viabilité matérielle (batterie moyenne à ~60%).
+* **Cibler la maintenance** : Identification immédiate des lignes de production critiques (Lignes A et C) concentrant la majorité des défauts.
+* **Analyser la stabilité** : Suivi temporel continu des anomalies (micro-batch de 5 minutes) validant la robustesse du pipeline d'ingestion.
+* **Évaluer la qualité du signal** : Répartition visuelle claire (vert/rouge) démontrant un taux de conformité des capteurs supérieur à 91%.
