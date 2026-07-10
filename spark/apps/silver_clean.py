@@ -1,7 +1,18 @@
-"""Silver : parsing, validation, deduplication, marquage des anomalies selon
-le contrat INFRA.md §6 : plage nominale du capteur (capteurs.csv) surchargee
-par le seuil machine (seuils_machine.csv), precedence par COALESCE.
-On MARQUE les anomalies, on ne supprime JAMAIS. Nommage : francais sans accents."""
+"""Silver Layer: Parsing, validation, déduplication, détection d'anomalies.
+
+RÈGLES (contrat INFRA.md §6):
+- Plage nominale du capteur (capteurs.csv)
+- Surchargée par le seuil machine (seuils_machine.csv)
+- Précédence: COALESCE (seuil machine prioritaire)
+- On MARQUE les anomalies, on ne supprime JAMAIS
+- Nommage: français sans accents
+
+ADAPTATION DATABRICKS:
+- Lit depuis la table Unity Catalog bronze_sensor_data
+- Les CSV référentiels doivent être dans le volume /Volumes/main/default/data_ref
+- Écrit vers la table Unity Catalog silver_sensor_data
+- Utilise trigger(availableNow=True) au lieu de processingTime (serverless)
+"""
 
 from pyspark.sql import functions as F
 from pyspark.sql.types import (
@@ -9,11 +20,11 @@ from pyspark.sql.types import (
 )
 
 from common import (
-    BRONZE_PATH, CAPTEURS_CSV, CHECKPOINT_DIR, SEUILS_MACHINE_CSV,
-    SILVER_PATH, build_spark,
+    BRONZE_TABLE, CAPTEURS_CSV, CHECKPOINT_DIR, SEUILS_MACHINE_CSV,
+    SILVER_TABLE, build_spark,
 )
 
-# Schema du JSON, fixe par l'enonce (timestamp encore en String ici)
+# Schema du JSON, fixé par l'énoncé (timestamp encore en String ici)
 EVENT_SCHEMA = StructType([
     StructField("event_id", StringType()),
     StructField("capteur_id", StringType()),
@@ -29,7 +40,15 @@ EVENT_SCHEMA = StructType([
 
 
 def load_referentiels(spark):
-    """Plages nominales par capteur + seuils par machine (INFRA.md §6)."""
+    """Charge les plages nominales par capteur + seuils par machine (INFRA.md §6).
+    
+    IMPORTANT: Les fichiers CSV doivent être uploadés dans le volume Unity Catalog:
+    - /Volumes/main/default/data_ref/capteurs.csv
+    - /Volumes/main/default/data_ref/seuils_machine.csv
+    
+    Pour créer le volume:
+        CREATE VOLUME IF NOT EXISTS main.default.data_ref;
+    """
     capteurs = (
         spark.read.option("header", "true").csv(CAPTEURS_CSV)
         .select(
@@ -54,19 +73,22 @@ def main():
     spark = build_spark("silver-clean")
     capteurs, seuils_machine = load_referentiels(spark)
 
-    bronze = spark.readStream.format("delta").load(BRONZE_PATH)
+    # Lecture streaming depuis la table Bronze Unity Catalog
+    bronze = spark.readStream.table(BRONZE_TABLE)
 
+    # Parsing du JSON
     parsed = bronze.select(
         F.from_json(F.col("payload_json"), EVENT_SCHEMA).alias("evt")
     ).select("evt.*")
 
+    # Conversion des types + date de l'événement
     typed = (
         parsed
         .withColumn("timestamp", F.to_timestamp("timestamp"))
         .withColumn("date_event", F.to_date("timestamp"))
     )
 
-    # Validation : on flague, on ne filtre pas
+    # Validation: on flague, on ne filtre pas
     flagged = typed.withColumn(
         "est_valide",
         F.col("event_id").isNotNull()
@@ -75,15 +97,15 @@ def main():
         & F.col("timestamp").isNotNull(),
     )
 
-    # Dedup par event_id, etat borne par le watermark (Spark 3.5+)
+    # Déduplication par event_id, état borné par le watermark (Spark 3.5+)
     deduped = (
         flagged.withWatermark("timestamp", "10 minutes")
         .dropDuplicatesWithinWatermark(["event_id"])
     )
 
-    # Chaine de jointures du contrat :
-    # flux -> capteurs (capteur_id) -> seuils_machine (machine_id, type_mesure)
-    # puis precedence : le seuil machine SURCHARGE la plage nominale.
+    # Chaîne de jointures du contrat:
+    # flux → capteurs (capteur_id) → seuils_machine (machine_id, type_mesure)
+    # puis précédence: le seuil machine SURCHARGE la plage nominale.
     with_seuils = (
         deduped
         .join(capteurs, ["capteur_id"], "left")
@@ -93,6 +115,7 @@ def main():
         .drop("plage_min", "plage_max", "seuil_min_machine", "seuil_max_machine")
     )
 
+    # Détection d'anomalies + typage
     silver = with_seuils.withColumn(
         "est_anomalie",
         F.col("est_valide")
@@ -112,15 +135,19 @@ def main():
         "est_valide", "est_anomalie", "type_anomalie",
     )
 
+    # Écriture streaming vers Unity Catalog
+    # Sur serverless: trigger(availableNow=True) au lieu de processingTime
     query = (
         silver.writeStream.format("delta")
         .outputMode("append")
         .option("checkpointLocation", f"{CHECKPOINT_DIR}/silver")
-        .trigger(processingTime="15 seconds")
+        .trigger(availableNow=True)  # Traite toutes les données disponibles puis s'arrête
         .partitionBy("date_event")
-        .start(SILVER_PATH)
+        .toTable(SILVER_TABLE)
     )
 
+    print(f">>> Silver layer streaming vers table: {SILVER_TABLE}")
+    print(f">>> Mode: availableNow (traite toutes les données disponibles)")
     query.awaitTermination()
 
 
